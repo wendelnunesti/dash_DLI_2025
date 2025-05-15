@@ -5,6 +5,7 @@
 # * Cache inválido quando o arquivo muda
 # * Filtros de Estado e Categoria, gráficos e tabelas
 # * Proteção de acesso via código (ACCESS_CODE, múltiplos separados por vírgula)
+# * Atualização automática a cada 10 min e botão de refresh manual
 #
 # Requisitos:
 #   pip install streamlit pandas requests python-dotenv beautifulsoup4
@@ -35,11 +36,11 @@ import streamlit as st
 load_dotenv()
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 2. Bloqueio de Acesso por Código  →  agora centralizado
+# 2. Bloqueio de Acesso por Código — tela centralizada
 # ══════════════════════════════════════════════════════════════════════════════
 VALID_CODES = {c.strip() for c in os.getenv("ACCESS_CODE", "").split(",") if c.strip()}
 
-def rerun():  # compatibilidade com versões antigas do Streamlit
+def rerun():                 # compat com versões antigas do Streamlit
     if hasattr(st, "rerun"):
         st.rerun()
     else:
@@ -48,43 +49,40 @@ def rerun():  # compatibilidade com versões antigas do Streamlit
 st.set_page_config(page_title="Dashboard (Acesso Restrito)", layout="wide")
 
 if not VALID_CODES:
-    st.error("ACCESS_CODE não definido em .env"); st.stop()
+    st.error("ACCESS_CODE não definido em .env")
+    st.stop()
 
-# flag de sessão
 if "auth_ok" not in st.session_state:
     st.session_state.auth_ok = False
 
-# ─── Tela de login ────────────────────────────────────────────────────────────
+# ─── Tela de login (aparece só enquanto não estiver autenticado) ──────────────
 if not st.session_state.auth_ok:
-    # (Opcional) esconde a sidebar enquanto não logado
-    st.markdown(
-        """
-        <style>[data-testid="stSidebar"] {display: none;}</style>
-        """,
-        unsafe_allow_html=True,
-    )
+    # esconde barra lateral
+    st.markdown("""
+        <style>[data-testid="stSidebar"] {display:none;}</style>
+        """, unsafe_allow_html=True)
 
-    st.markdown("<h2 style='text-align:center'>🔒 Área restrita</h2>", unsafe_allow_html=True)
+    st.markdown("<h2 style='text-align:center'>🔒 Área restrita</h2>",
+                unsafe_allow_html=True)
 
-    # cria 3 colunas → usa a coluna do meio para centralizar
-    col_esq, col_centro, col_dir = st.columns([2, 3, 2])
-    with col_centro:
+    col_esq, col_meio, col_dir = st.columns([2, 3, 2])
+    with col_meio:
         with st.form("login_form"):
-            codigo = st.text_input("Código de acesso", type="password")
-            ok     = st.form_submit_button("Entrar")
+            pwd = st.text_input("Código de acesso", type="password")
+            entrar = st.form_submit_button("Entrar")
 
-        if ok:                     # botão pressionado
-            if codigo in VALID_CODES:
+        if entrar:
+            if pwd in VALID_CODES:
                 st.session_state.auth_ok = True
                 rerun()
             else:
                 st.error("Código inválido")
+    st.stop()
 
-    st.stop()  # bloqueia o restante do app até autenticar
-
-# ─── Botão de logout (agora no cabeçalho) ─────────────────────────────────────
-st.sidebar.button("Sair", key="logout", on_click=lambda: (st.session_state.update(auth_ok=False), rerun()))
-
+# (sidebar volta a aparecer após o login)
+if st.sidebar.button("Sair"):
+    st.session_state.auth_ok = False
+    rerun()
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 3. Parâmetros fixos e credenciais WP
@@ -92,7 +90,7 @@ st.sidebar.button("Sair", key="logout", on_click=lambda: (st.session_state.updat
 CSV_PATH   = pathlib.Path(__file__).parent / "docs" / "job_listings_export.csv"
 LOGIN_URL  = "https://dialivredeimpostos.org.br/wp-login.php"
 EXPORT_URL = "https://dialivredeimpostos.org.br/?export_jobs_csv"
-MAX_AGE    = dt.timedelta(hours=1)
+MAX_AGE    = dt.timedelta(hours=1)         # baixa do WP se arquivo for mais velho
 
 WP_USER = os.getenv("WP_USER")
 WP_PASS = os.getenv("WP_PASS")
@@ -101,17 +99,15 @@ if not WP_USER or not WP_PASS:
     st.stop()
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 4. Funções para baixar e atualizar o CSV
+# 4. Funções de download & update
 # ══════════════════════════════════════════════════════════════════════════════
 def download_csv() -> bytes:
     with requests.Session() as sess:
-        sess.get(LOGIN_URL, timeout=10)  # cookies
+        # pega cookies
+        sess.get(LOGIN_URL, timeout=10)
         payload = dict(
-            log=WP_USER,
-            pwd=WP_PASS,
-            wp_submit="Log In",
-            redirect_to=EXPORT_URL,
-            testcookie="1",
+            log=WP_USER, pwd=WP_PASS, wp_submit="Log In",
+            redirect_to=EXPORT_URL, testcookie="1",
         )
         sess.post(LOGIN_URL, data=payload, timeout=10, allow_redirects=True)
         r = sess.get(EXPORT_URL, timeout=30)
@@ -121,7 +117,7 @@ def download_csv() -> bytes:
         return r.content
 
 def update_csv():
-    """Baixa o CSV se não existir ou estiver desatualizado (> MAX_AGE)."""
+    """Baixa o CSV se não existir, se estiver ‘velho’ ou se o usuário pedir."""
     try:
         outdated = (
             not CSV_PATH.exists() or
@@ -132,36 +128,51 @@ def update_csv():
 
         data = download_csv()
         CSV_PATH.parent.mkdir(parents=True, exist_ok=True)
-
-        # grava em arquivo temporário e faz replace atômico
-        with tempfile.NamedTemporaryFile("wb", delete=False, dir=CSV_PATH.parent) as tmp:
+        with tempfile.NamedTemporaryFile("wb", delete=False,
+                                         dir=CSV_PATH.parent) as tmp:
             tmp.write(data)
-            tmp.flush()
-            os.fsync(tmp.fileno())
+            tmp.flush(); os.fsync(tmp.fileno())
             tmp_path = pathlib.Path(tmp.name)
         tmp_path.replace(CSV_PATH)
     except Exception as e:
         st.warning(f"⚠️  Não foi possível atualizar o CSV: {e}")
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 5. Atualiza e carrega dados
+# 5. Atualização automática e botão manual
 # ══════════════════════════════════════════════════════════════════════════════
+# força recarga se usuário clicar no botão
+if st.sidebar.button("🔄 Atualizar dados agora"):
+    update_csv()
+    rerun()                               # recarrega tela imediatamente
+
+# JavaScript: recarrega página a cada 10 min (600 000 ms)
+st.markdown("""
+    <script>
+        const timeout = 600000;  // 10 minutos
+        setTimeout(() => {window.location.reload();}, timeout);
+    </script>
+    """, unsafe_allow_html=True)
+
+# antes de cada run, tenta baixar se necessário
 update_csv()
 
-@st.cache_data(show_spinner=False)
+# ══════════════════════════════════════════════════════════════════════════════
+# 6. Carrega dados (cache invalida por mtime ou em 10 min)
+# ══════════════════════════════════════════════════════════════════════════════
+@st.cache_data(show_spinner=False, ttl=600)             # 10 min
 def load_data(path: pathlib.Path, mtime: float) -> pd.DataFrame:
     df = pd.read_csv(path, dtype=str).fillna("")
-    def clean(x):
-        if isinstance(x, str):
-            return html.unescape(x).replace("–", "-").replace("—", "-")
-        return x
+    def clean(val):
+        if isinstance(val, str):
+            return html.unescape(val).replace("–", "-").replace("—", "-")
+        return val
     return df.applymap(clean)
 
 mtime = CSV_PATH.stat().st_mtime
 df = load_data(CSV_PATH, mtime)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 6. Interface do Dashboard
+# 7. Interface do Dashboard
 # ══════════════════════════════════════════════════════════════════════════════
 st.title("Dashboard Coordenadores CDL Jovem - DLI 2025")
 st.caption(f"Atualizado em {dt.datetime.fromtimestamp(mtime):%d/%m %H:%M}")
@@ -185,10 +196,10 @@ if set(cats_sel) != set(categorias):
         lambda x: any(cat.strip() in cats_sel for cat in x.split(",")))]
 
 # ─── Métricas ─────────────────────────────────────────────────────────────────
-c1, c2, c3 = st.columns(3)
-c1.metric("Registros", f"{len(df_f):,}")
-c2.metric("Estado(s)", "Todos" if estado_sel == "Todos" else 1)
-c3.metric("Categorias", len(cats_sel))
+m1, m2, m3 = st.columns(3)
+m1.metric("Registros", f"{len(df_f):,}")
+m2.metric("Estado(s)", "Todos" if estado_sel == "Todos" else 1)
+m3.metric("Categorias", len(cats_sel))
 
 st.divider()
 
@@ -227,8 +238,10 @@ if query:
 
 st.dataframe(
     lojas[["Title", "geolocation_city", "geolocation_state_long"]]
-        .rename(columns={"Title": "Loja", "geolocation_city": "Cidade", "geolocation_state_long": "Estado"}),
+        .rename(columns={"Title": "Loja",
+                         "geolocation_city": "Cidade",
+                         "geolocation_state_long": "Estado"}),
     use_container_width=True
 )
 
-st.caption("© 2025 — Dashboard DLI 2025 - Tecnologia CNDL")
+st.caption("© 2025 — Dashboard DLI 2025 · Tecnologia CNDL")
