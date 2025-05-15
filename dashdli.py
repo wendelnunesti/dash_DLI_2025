@@ -20,7 +20,7 @@ load_dotenv()
 # ══════════════════════════════════════════════════════════════════════════════
 VALID_CODES = {c.strip() for c in os.getenv("ACCESS_CODE", "").split(",") if c.strip()}
 
-def rerun():                 # compat com versões antigas do Streamlit
+def rerun():                                # compat com versões antigas do Streamlit
     if hasattr(st, "rerun"):
         st.rerun()
     else:
@@ -39,7 +39,7 @@ if "auth_ok" not in st.session_state:
 if not st.session_state.auth_ok:
     # esconde barra lateral
     st.markdown("""
-        <style>[data-testid="stSidebar"] {display:none;}</style>
+        <style>[data-testid="stSidebar"]{display:none;}</style>
         """, unsafe_allow_html=True)
 
     st.markdown("<h2 style='text-align:center'>🔒 Área restrita</h2>",
@@ -47,13 +47,14 @@ if not st.session_state.auth_ok:
 
     col_esq, col_meio, col_dir = st.columns([2, 3, 2])
     with col_meio:
-        with st.form("login_form"):
+        with st.form("login_form", clear_on_submit=True):
             pwd = st.text_input("Código de acesso", type="password")
             entrar = st.form_submit_button("Entrar")
 
         if entrar:
             if pwd in VALID_CODES:
                 st.session_state.auth_ok = True
+                st.session_state.just_logged_in = True  # sinaliza login recente
                 rerun()
             else:
                 st.error("Código inválido")
@@ -67,10 +68,11 @@ if st.sidebar.button("Sair"):
 # ══════════════════════════════════════════════════════════════════════════════
 # 3. Parâmetros fixos e credenciais WP
 # ══════════════════════════════════════════════════════════════════════════════
-CSV_PATH   = pathlib.Path(__file__).parent / "docs" / "job_listings_export.csv"
-LOGIN_URL  = "https://dialivredeimpostos.org.br/wp-login.php"
+BASE_DIR  = pathlib.Path(__file__).parent
+CSV_PATH  = BASE_DIR / "docs" / "job_listings_export.csv"
+LOGIN_URL = "https://dialivredeimpostos.org.br/wp-login.php"
 EXPORT_URL = "https://dialivredeimpostos.org.br/?export_jobs_csv"
-MAX_AGE    = dt.timedelta(hours=1)         # baixa do WP se arquivo for mais velho
+MAX_AGE   = dt.timedelta(hours=1)          # baixa do WP se arquivo for mais velho
 
 WP_USER = os.getenv("WP_USER")
 WP_PASS = os.getenv("WP_PASS")
@@ -82,25 +84,25 @@ if not WP_USER or not WP_PASS:
 # 4. Funções de download & update
 # ══════════════════════════════════════════════════════════════════════════════
 def download_csv() -> bytes:
+    """Faz login no WP e devolve o conteúdo do CSV."""
     with requests.Session() as sess:
-        # pega cookies
-        sess.get(LOGIN_URL, timeout=10)
+        sess.get(LOGIN_URL, timeout=10)               # obtém cookies
         payload = dict(
             log=WP_USER, pwd=WP_PASS, wp_submit="Log In",
-            redirect_to=EXPORT_URL, testcookie="1",
+            redirect_to=EXPORT_URL, testcookie="1"
         )
-        sess.post(LOGIN_URL, data=payload, timeout=10, allow_redirects=True)
+        sess.post(LOGIN_URL, data=payload,
+                  allow_redirects=True, timeout=10)
         r = sess.get(EXPORT_URL, timeout=30)
         r.raise_for_status()
         if "text/csv" not in r.headers.get("Content-Type", ""):
             raise ValueError("Resposta não é CSV. Verifique credenciais ou URL.")
         return r.content
 
-# <<< ALTERADO >>> adiciona parâmetro force
 def update_csv(force: bool = False):
     """
     Baixa o CSV se não existir, se estiver ‘velho’ ou se `force=True`.
-    Substitui o arquivo antigo por um novo de forma atômica.
+    Salva de forma atômica e mantém o arquivo sempre com o nome fixo.
     """
     try:
         outdated = force or (
@@ -119,16 +121,23 @@ def update_csv(force: bool = False):
             tmp_path = pathlib.Path(tmp.name)
         tmp_path.replace(CSV_PATH)
     except Exception as e:
-        st.warning(f"⚠️  Não foi possível atualizar o CSV: {e}")
+        st.warning(f"⚠️ Não foi possível atualizar o CSV: {e}")
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 5. Atualização automática e botão manual
+# 5. Atualização automática, pós-login e botão manual
 # ══════════════════════════════════════════════════════════════════════════════
-# <<< ALTERADO >>> força download, limpa cache e recarrega
+# força download no primeiro ciclo após login
+force_now = st.session_state.pop("just_logged_in", False)
+
+# botão na sidebar
 if st.sidebar.button("🔄 Atualizar dados agora"):
-    update_csv(force=True)          # força atualização
-    st.cache_data.clear()           # limpa cache dos dados
-    rerun()                         # recarrega tela imediatamente
+    force_now = True
+
+if force_now:
+    update_csv(force=True)
+    st.cache_data.clear()   # invalida DataFrame em cache
+else:
+    update_csv()            # só baixa se estiver ‘velho’
 
 # JavaScript: recarrega página a cada 10 min (600 000 ms)
 st.markdown("""
@@ -138,13 +147,10 @@ st.markdown("""
     </script>
     """, unsafe_allow_html=True)
 
-# antes de cada run, tenta baixar se necessário
-update_csv()
-
 # ══════════════════════════════════════════════════════════════════════════════
-# 6. Carrega dados (cache invalida por mtime ou em 10 min)
+# 6. Carrega dados (cache invalida em 10 min ou quando mtime muda)
 # ══════════════════════════════════════════════════════════════════════════════
-@st.cache_data(show_spinner=False, ttl=600)             # 10 min
+@st.cache_data(show_spinner=False, ttl=600)            # 10 min
 def load_data(path: pathlib.Path, mtime: float) -> pd.DataFrame:
     df = pd.read_csv(path, dtype=str).fillna("")
     def clean(val):
@@ -159,7 +165,7 @@ df = load_data(CSV_PATH, mtime)
 # ══════════════════════════════════════════════════════════════════════════════
 # 7. Interface do Dashboard
 # ══════════════════════════════════════════════════════════════════════════════
-st.title("Dashboard Coordenadores CDL Jovem - DLI 2025")
+st.title("Dashboard Coordenadores CDL Jovem – DLI 2025")
 st.caption(f"Atualizado em {dt.datetime.fromtimestamp(mtime):%d/%m %H:%M}")
 
 # ─── Filtros ───────────────────────────────────────────────────────────────────
