@@ -1,23 +1,3 @@
-# app.py
-# ───────────────────────────────────────────────────────────────────────────────
-# Dashboard Streamlit para o CSV privado do WordPress
-# * Download automático com login (WP_USER / WP_PASS)
-# * Cache inválido quando o arquivo muda
-# * Filtros de Estado e Categoria, gráficos e tabelas
-# * Proteção de acesso via código (ACCESS_CODE, múltiplos separados por vírgula)
-# * Atualização automática a cada 10 min e botão de refresh manual
-#
-# Requisitos:
-#   pip install streamlit pandas requests python-dotenv beautifulsoup4
-#
-# Execução:
-#   streamlit run app.py
-#
-# Estrutura esperada:
-#   ├─ .env   → WP_USER, WP_PASS, ACCESS_CODE
-#   ├─ app.py
-#   └─ docs/  (criada automaticamente)
-# ───────────────────────────────────────────────────────────────────────────────
 
 import os
 import html
@@ -116,10 +96,14 @@ def download_csv() -> bytes:
             raise ValueError("Resposta não é CSV. Verifique credenciais ou URL.")
         return r.content
 
-def update_csv():
-    """Baixa o CSV se não existir, se estiver ‘velho’ ou se o usuário pedir."""
+# <<< ALTERADO >>> adiciona parâmetro force
+def update_csv(force: bool = False):
+    """
+    Baixa o CSV se não existir, se estiver ‘velho’ ou se `force=True`.
+    Substitui o arquivo antigo por um novo de forma atômica.
+    """
     try:
-        outdated = (
+        outdated = force or (
             not CSV_PATH.exists() or
             dt.datetime.now() - dt.datetime.fromtimestamp(CSV_PATH.stat().st_mtime) > MAX_AGE
         )
@@ -140,10 +124,11 @@ def update_csv():
 # ══════════════════════════════════════════════════════════════════════════════
 # 5. Atualização automática e botão manual
 # ══════════════════════════════════════════════════════════════════════════════
-# força recarga se usuário clicar no botão
+# <<< ALTERADO >>> força download, limpa cache e recarrega
 if st.sidebar.button("🔄 Atualizar dados agora"):
-    update_csv()
-    rerun()                               # recarrega tela imediatamente
+    update_csv(force=True)          # força atualização
+    st.cache_data.clear()           # limpa cache dos dados
+    rerun()                         # recarrega tela imediatamente
 
 # JavaScript: recarrega página a cada 10 min (600 000 ms)
 st.markdown("""
