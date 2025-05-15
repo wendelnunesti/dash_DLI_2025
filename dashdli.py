@@ -35,12 +35,11 @@ import streamlit as st
 load_dotenv()
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 2. Bloqueio de Acesso por Código
+# 2. Bloqueio de Acesso por Código  →  agora centralizado
 # ══════════════════════════════════════════════════════════════════════════════
 VALID_CODES = {c.strip() for c in os.getenv("ACCESS_CODE", "").split(",") if c.strip()}
 
-def rerun():
-    """Compat: usa st.rerun() se existir; senão fallback para st.experimental_rerun()."""
+def rerun():  # compatibilidade com versões antigas do Streamlit
     if hasattr(st, "rerun"):
         st.rerun()
     else:
@@ -49,27 +48,43 @@ def rerun():
 st.set_page_config(page_title="Dashboard (Acesso Restrito)", layout="wide")
 
 if not VALID_CODES:
-    st.error("ACCESS_CODE não definido em .env")
-    st.stop()
+    st.error("ACCESS_CODE não definido em .env"); st.stop()
 
+# flag de sessão
 if "auth_ok" not in st.session_state:
     st.session_state.auth_ok = False
 
+# ─── Tela de login ────────────────────────────────────────────────────────────
 if not st.session_state.auth_ok:
-    st.sidebar.header("Acesso restrito")
-    code_input = st.sidebar.text_input("Digite o código de acesso", type="password")
-    if code_input:
-        if code_input in VALID_CODES:
-            st.session_state.auth_ok = True
-            st.rerun()
-        else:
-            st.sidebar.error("Código inválido")
-    st.stop()  # bloqueia o restante do app
+    # (Opcional) esconde a sidebar enquanto não logado
+    st.markdown(
+        """
+        <style>[data-testid="stSidebar"] {display: none;}</style>
+        """,
+        unsafe_allow_html=True,
+    )
 
-# (Opcional) Botão de logout
-if st.sidebar.button("Sair"):
-    st.session_state.auth_ok = False
-    st.rerun()
+    st.markdown("<h2 style='text-align:center'>🔒 Área restrita</h2>", unsafe_allow_html=True)
+
+    # cria 3 colunas → usa a coluna do meio para centralizar
+    col_esq, col_centro, col_dir = st.columns([2, 3, 2])
+    with col_centro:
+        with st.form("login_form"):
+            codigo = st.text_input("Código de acesso", type="password")
+            ok     = st.form_submit_button("Entrar")
+
+        if ok:                     # botão pressionado
+            if codigo in VALID_CODES:
+                st.session_state.auth_ok = True
+                rerun()
+            else:
+                st.error("Código inválido")
+
+    st.stop()  # bloqueia o restante do app até autenticar
+
+# ─── Botão de logout (agora no cabeçalho) ─────────────────────────────────────
+st.sidebar.button("Sair", key="logout", on_click=lambda: (st.session_state.update(auth_ok=False), rerun()))
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 3. Parâmetros fixos e credenciais WP
