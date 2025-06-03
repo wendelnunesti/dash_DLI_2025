@@ -69,7 +69,8 @@ if st.sidebar.button("Sair"):
 # 3. Parâmetros fixos e credenciais WP
 # ══════════════════════════════════════════════════════════════════════════════
 BASE_DIR  = pathlib.Path(__file__).parent
-CSV_PATH  = BASE_DIR / "docs" / "job_listings_export.csv"
+#CSV_PATH  = BASE_DIR / "docs" / "job_listings_export.csv"
+CSV_PATH  = BASE_DIR / "lojas.csv"
 LOGIN_URL = "https://dialivredeimpostos.org.br/wp-login.php"
 EXPORT_URL = "https://dialivredeimpostos.org.br/?export_jobs_csv"
 MAX_AGE   = dt.timedelta(hours=1)          # baixa do WP se arquivo for mais velho
@@ -121,7 +122,8 @@ def update_csv(force: bool = False):
             tmp_path = pathlib.Path(tmp.name)
         tmp_path.replace(CSV_PATH)
     except Exception as e:
-        st.warning(f"⚠️ Não foi possível atualizar o CSV: {e}")
+        #st.warning(f"⚠️ Não foi possível atualizar o CSV: {e}")
+        pass
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 5. Atualização automática, pós-login e botão manual
@@ -152,7 +154,7 @@ st.markdown("""
 # ══════════════════════════════════════════════════════════════════════════════
 @st.cache_data(show_spinner=False, ttl=600)            # 10 min
 def load_data(path: pathlib.Path, mtime: float) -> pd.DataFrame:
-    df = pd.read_csv(path, dtype=str).fillna("")
+    df = pd.read_csv(path, sep=";", encoding="utf-8", dtype=str).fillna("")
     def clean(val):
         if isinstance(val, str):
             return html.unescape(val).replace("–", "-").replace("—", "-")
